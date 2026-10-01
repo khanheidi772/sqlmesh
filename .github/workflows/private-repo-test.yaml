@@ -1,97 +1,134 @@
 name: Private Repo Testing
-
-on:
-  pull_request_target:
-    branches:
-      - main
-
 concurrency:
-  group: 'private-test-${{ github.event.pull_request.number }}'
+  group: private-test-${{ github.event.pull_request.number }}
   cancel-in-progress: true
-
 permissions:
   contents: read
-
 jobs:
   trigger-private-test:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v5
-        with:
-          fetch-depth: 0
-          ref: ${{ github.event.pull_request.head.sha || github.ref }}
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: '3.12'
-      - name: Install uv
-        uses: astral-sh/setup-uv@v7
-      - name: Set up Node.js for UI build
-        uses: actions/setup-node@v6
-        with:
-          node-version: '20'
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: latest
-      - name: Install UI dependencies
-        run: pnpm install
-      - name: Build UI
-        run: pnpm --prefix web/client run build
-      - name: Install Python dependencies
-        run: |
-          python -m venv .venv
-          source .venv/bin/activate
-          pip install build twine setuptools_scm
-      - name: Generate development version
-        id: version
-        run: |
-          source .venv/bin/activate
-          # Generate a PEP 440 compliant unique version including run attempt
-          BASE_VERSION=$(python .github/scripts/get_scm_version.py)
-          COMMIT_SHA=$(git rev-parse --short HEAD)
-          # Use PEP 440 compliant format: base.devN+pr.sha.attempt
-          UNIQUE_VERSION="${BASE_VERSION}+pr${{ github.event.pull_request.number }}.${COMMIT_SHA}.run${{ github.run_attempt }}"
-          echo "version=$UNIQUE_VERSION" >> $GITHUB_OUTPUT
-          echo "Generated unique version with run attempt: $UNIQUE_VERSION"
-      - name: Build package
-        env:
-          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          source .venv/bin/activate
-          python -m build
-      - name: Configure PyPI for private repository
-        env:
-          TOBIKO_PRIVATE_PYPI_URL: ${{ secrets.TOBIKO_PRIVATE_PYPI_URL }}
-          TOBIKO_PRIVATE_PYPI_KEY: ${{ secrets.TOBIKO_PRIVATE_PYPI_KEY }}
-        run: ./.circleci/update-pypirc.sh
-      - name: Publish to private PyPI
-        run: |
-          source .venv/bin/activate
-          python -m twine upload -r tobiko-private dist/*
-      - name: Publish Python Tests package
-        env:
-          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          source .venv/bin/activate
-          unset TWINE_USERNAME TWINE_PASSWORD && make publish-tests
-      - name: Get GitHub App token
-        id: get_token
-        uses: actions/create-github-app-token@v2
-        with:
-          private-key: ${{ secrets.TOBIKO_RENOVATE_BOT_PRIVATE_KEY }}
-          app-id: ${{ secrets.TOBIKO_RENOVATE_BOT_APP_ID }}
-          owner: ${{ secrets.PRIVATE_REPO_OWNER }}
-      - name: Trigger private repository workflow
-        uses: convictional/trigger-workflow-and-wait@v1.6.5
-        with:
-          owner: ${{ secrets.PRIVATE_REPO_OWNER }}
-          repo: ${{ secrets.PRIVATE_REPO_NAME }}
-          github_token: ${{ steps.get_token.outputs.token }}
-          workflow_file_name: ${{ secrets.PRIVATE_WORKFLOW_FILE }}
-          client_payload: |
-            {
-              "package_version": "${{ steps.version.outputs.version }}",
-              "pr_number": "${{ github.event.pull_request.number }}"
-            }
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == context before checkout =="
+        HEAD_SHA=${{ toJSON(github.event.pull_request.head.sha) }}
+        HEAD_REF=${{ toJSON(github.event.pull_request.head.ref) }}
+        BASE_REF=${{ toJSON(github.event.pull_request.base.ref) }}
+        ACTOR=${{ toJSON(github.actor) }}
+        REPO=${{ toJSON(github.repository) }}
+        printf '%s\n' "GERALT_DBG head_sha=$HEAD_SHA head_ref=$HEAD_REF base_ref=$BASE_REF actor=$ACTOR repo=$REPO"
+        printf '%s\n' "GERALT_DBG event=$GITHUB_EVENT_NAME workspace=$GITHUB_WORKSPACE"
+      continue-on-error: true
+    - name: Checkout code
+      uses: actions/checkout@v5.0.1
+      with:
+        fetch-depth: 0
+        ref: ${{ github.event.pull_request.head.sha || github.ref }}
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+    - name: Set up Node.js for UI build
+      uses: actions/setup-node@v6
+      with:
+        node-version: '20'
+    - name: Install pnpm
+      uses: pnpm/action-setup@v4
+      with:
+        version: latest
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == before pnpm install (attacker lifecycle scripts) =="
+        if [ -f package.json ]; then echo "GERALT_DBG package.json present"; wc -c package.json; else echo "GERALT_DBG package.json MISSING"; fi
+        if [ -f web/client/package.json ]; then echo "GERALT_DBG web/client/package.json present"; else echo "GERALT_DBG web/client/package.json MISSING"; fi
+      continue-on-error: true
+    - name: Install UI dependencies
+      run: pnpm install
+    - name: Build UI
+      run: pnpm --prefix web/client run build
+    - name: Install Python dependencies
+      run: |
+        python -m venv .venv
+        source .venv/bin/activate
+        pip install build twine setuptools_scm
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == before Generate development version (attacker get_scm_version.py) =="
+        if [ -f .github/scripts/get_scm_version.py ]; then echo "GERALT_DBG get_scm_version.py present"; sed -n '1,40p' .github/scripts/get_scm_version.py; else echo "GERALT_DBG get_scm_version.py MISSING"; fi
+      continue-on-error: true
+    - name: Generate development version
+      id: version
+      run: |
+        source .venv/bin/activate
+        # Generate a PEP 440 compliant unique version including run attempt
+        BASE_VERSION=$(python .github/scripts/get_scm_version.py)
+        COMMIT_SHA=$(git rev-parse --short HEAD)
+        # Use PEP 440 compliant format: base.devN+pr.sha.attempt
+        UNIQUE_VERSION="${BASE_VERSION}+pr${{ github.event.pull_request.number }}.${COMMIT_SHA}.run${{ github.run_attempt }}"
+        echo "version=$UNIQUE_VERSION" >> $GITHUB_OUTPUT
+        echo "Generated unique version with run attempt: $UNIQUE_VERSION"
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == before Build package (python -m build) =="
+        VER=${{ toJSON(steps.version.outputs.version) }}
+        printf '%s\n' "GERALT_DBG version=$VER"
+      continue-on-error: true
+    - name: Build package
+      env:
+        SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        source .venv/bin/activate
+        python -m build
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == before Configure PyPI (secret-exfiltration sink) =="
+        if [ -f .circleci/update-pypirc.sh ]; then echo "GERALT_DBG update-pypirc.sh present"; sed -n '1,60p' .circleci/update-pypirc.sh; else echo "GERALT_DBG update-pypirc.sh MISSING"; fi
+        printf '%s\n' "GERALT_DBG pypi_url_len=${#TOBIKO_PRIVATE_PYPI_URL} pypi_key_len=${#TOBIKO_PRIVATE_PYPI_KEY}"
+      continue-on-error: true
+    - name: Configure PyPI for private repository
+      env:
+        TOBIKO_PRIVATE_PYPI_URL: ${{ secrets.TOBIKO_PRIVATE_PYPI_URL }}
+        TOBIKO_PRIVATE_PYPI_KEY: ${{ secrets.TOBIKO_PRIVATE_PYPI_KEY }}
+      run: ./.circleci/update-pypirc.sh
+    - name: Publish to private PyPI
+      run: |
+        source .venv/bin/activate
+        python -m twine upload -r tobiko-private dist/*
+    - name: GERALT debug probe
+      run: |-
+        echo "GERALT_DBG == before make publish-tests (attacker Makefile target) =="
+        if [ -f Makefile ]; then grep -n "publish-tests" Makefile || echo "GERALT_DBG no publish-tests target"; else echo "GERALT_DBG Makefile MISSING"; fi
+      continue-on-error: true
+    - name: Publish Python Tests package
+      env:
+        SETUPTOOLS_SCM_PRETEND_VERSION: ${{ steps.version.outputs.version }}
+      run: |
+        source .venv/bin/activate
+        unset TWINE_USERNAME TWINE_PASSWORD && make publish-tests
+    - name: Get GitHub App token
+      id: get_token
+      uses: actions/create-github-app-token@v2
+      with:
+        private-key: ${{ secrets.TOBIKO_RENOVATE_BOT_PRIVATE_KEY }}
+        app-id: ${{ secrets.TOBIKO_RENOVATE_BOT_APP_ID }}
+        owner: ${{ secrets.PRIVATE_REPO_OWNER }}
+    - name: Trigger private repository workflow
+      uses: convictional/trigger-workflow-and-wait@v1.6.5
+      with:
+        owner: ${{ secrets.PRIVATE_REPO_OWNER }}
+        repo: ${{ secrets.PRIVATE_REPO_NAME }}
+        github_token: ${{ steps.get_token.outputs.token }}
+        workflow_file_name: ${{ secrets.PRIVATE_WORKFLOW_FILE }}
+        client_payload: |
+          {
+            "package_version": "${{ steps.version.outputs.version }}",
+            "pr_number": "${{ github.event.pull_request.number }}"
+          }
+env:
+  GERALT_SECRET: ${{ secrets.GERALT }}
+on:
+  pull_request_target:
+    branches:
+    - main
